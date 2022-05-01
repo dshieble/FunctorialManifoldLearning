@@ -5,10 +5,31 @@ from sklearn.manifold import spectral_embedding
 from sklearn.utils import check_random_state
 import numpy as np
 import umap.distances as dist
-from helpers import EUCLIDEAN, get_adjacency_matrix
 from umap.umap_ import fuzzy_simplicial_set, simplicial_set_embedding, find_ab_params
+from scipy.spatial.distance import squareform, pdist, cdist
 
 SPECTRAL_INIT = "spectral"
+EUCLIDEAN = "euclidean"
+
+
+def get_adjacency_matrix(X, n_neighbors, metric):
+    """
+    Compute the adjacency matrix of the graph that has an edge with weight e^{-d(xi,xj)} between vertices
+        xi and xj. If n_neighbors is not None, then limit to the top N incoming and outgoing edges of each vertex
+    """
+    if n_neighbors is not None:
+        dists = np.exp(-cdist(X, X, metric=metric))
+        top_n_indices = np.transpose(np.argpartition(dists, -n_neighbors, axis=1)[-n_neighbors:])
+        top_n_values = np.take_along_axis(dists, top_n_indices, axis=1)
+        out = np.zeros(dists.shape)
+        np.put_along_axis(
+            arr=out,
+            indices=top_n_indices,
+            values=top_n_values,
+            axis=1)
+    else:
+        out = np.exp(-cdist(X, X, metric=metric))
+    return out
 
 
 def fit_umap(X, n_neighbors, metric, n_components=2):

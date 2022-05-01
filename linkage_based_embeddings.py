@@ -1,25 +1,39 @@
 import numpy as np
-from sklearn.neighbors import NearestNeighbors
 from tqdm import tqdm
 from collections import defaultdict
-from sklearn.manifold import spectral_embedding, MDS
 from scipy.spatial.distance import squareform, pdist, cdist
-from sklearn.decomposition import PCA
 from numba import njit, jit
 from numba import types
 from numba.typed import Dict
 from scipy.cluster.hierarchy import linkage
-from helpers import mds, write_embedding_to_text_file, write_embedding_to_two_text_files, is_numeric
-from sklearn.neighbors import NearestNeighbors
-from sequence import mutate_sequence, generate_mutation_chain, sequence_distance, evaluate_embeddings
+from sklearn.manifold import MDS
+
+def mds(strength_matrix, n_components):
+    """
+    Args:
+        strength_matrix: Matrix where i,j is the strength of the connection between row entity i and col entity j
+        n_components: Number of dimensions
+    Returns:
+        Non-Metric Multidimensional Scaling embeddings
+    """
+    return MDS(n_components=n_components, dissimilarity="precomputed").fit_transform(-np.log(strength_matrix))
 
 
 @jit(nopython=True)
-def _build_distance_matrix_from_linked_helper(distance_matrix, cluster_tree, int_array=types.int64[:]):
+def _build_distance_matrix_from_linked_helper(distance_matrix, cluster_tree, value_type=types.int64[:]):
+    """
+    Convert a distance matrix to a strength matrix describing the strength of the connections between points
+        according to single linkage
+    Args:
+        distance_matrix: The output of scipy.spatial.distance.pdist
+        cluster_tree: Output of scipy.cluster.hierarchy.linkage
+    Returns:
+        Embedding matrix
+    """
     num_points = len(cluster_tree) + 1
     cluster_indices_to_points = Dict.empty(
         key_type=types.int64,
-        value_type=int_array
+        value_type=value_type
     )
     for i in np.arange(num_points, dtype=np.int64):
         cluster_indices_to_points[i] = np.array([i], dtype=np.int64)
@@ -45,11 +59,27 @@ def _build_distance_matrix_from_linked_helper(distance_matrix, cluster_tree, int
 
 
 def build_distance_matrix_from_linked(cluster_tree):
+    """
+    Given a clustering linkage tree, generate a distance matrix based on the tree depth
+        at which points end up in the same cluster
+    Args:
+        cluster_tree: Output of scipy.cluster.hierarchy.linkage
+    Returns:
+        Distance matrix
+    """
     distance_matrix = np.zeros((len(cluster_tree) + 1, len(cluster_tree) + 1))
     return _build_distance_matrix_from_linked_helper(distance_matrix=distance_matrix, cluster_tree=cluster_tree)
 
 
 def build_single_linkage_simplex_strength_matrix(condensed_raw_distance_matrix):
+    """
+    Convert a distance matrix to a strength matrix describing the strength of the connections between points
+        according to single linkage
+    Args:
+        condensed_raw_distance_matrix: The output of scipy.spatial.distance.pdist
+    Returns:
+        Embedding matrix
+    """
     cluster_tree = linkage(condensed_raw_distance_matrix)
     single_linkage_distance_matrix, _ = build_distance_matrix_from_linked(cluster_tree=cluster_tree)
     single_linkage_simplex_strength_matrix = np.exp(-single_linkage_distance_matrix)
@@ -57,26 +87,29 @@ def build_single_linkage_simplex_strength_matrix(condensed_raw_distance_matrix):
 
 
 def single_linkage_mds_from_condensed(condensed_raw_distance_matrix, n_components):
+    """
+    Generate single linkage scaling embeddings from a distance matrix
+    Args:
+        condensed_raw_distance_matrix: The output of scipy.spatial.distance.pdist
+        n_components: The number dimensions
+    Returns:
+        Embedding matrix
+    """
     single_linkage_simplex_strength_matrix =  build_single_linkage_simplex_strength_matrix(condensed_raw_distance_matrix)
-    return mds(single_linkage_simplex_strength_matrix, n_components=n_components)
+    return mds(n_components=n_components, strength_matrix=single_linkage_simplex_strength_matrix)
 
 
-def single_linkage_spectral_from_condensed(condensed_raw_distance_matrix, n_components, drop_first=False):
-    single_linkage_simplex_strength_matrix =  build_single_linkage_simplex_strength_matrix(condensed_raw_distance_matrix)
-    return spectral_embedding(single_linkage_simplex_strength_matrix, n_components=n_components, drop_first=drop_first)
 
 
-def maximal_linkage_mds_from_condensed(condensed_distance_matrix, n_components):
-    distance_matrix = squareform(condensed_distance_matrix)
+def maximal_linkage_mds_from_condensed(condensed_raw_distance_matrix, n_components):
+    """
+    Generate MDS embeddings from a distance matrix
+    Args:
+        condensed_raw_distance_matrix: The output of scipy.spatial.distance.pdist
+        n_components: The number dimensions
+    Returns:
+        Embedding matrix
+    """
+    distance_matrix = squareform(condensed_raw_distance_matrix)
     simplex_strength_matrix = np.exp(-distance_matrix)
-    return mds(simplex_strength_matrix, n_components=n_components)
-
-
-def maximal_linkage_spectral_from_condensed(condensed_distance_matrix, n_components, drop_first=False):
-    distance_matrix = squareform(condensed_distance_matrix)
-    simplex_strength_matrix = np.exp(-distance_matrix)
-    return spectral_embedding(simplex_strength_matrix, n_components=n_components, drop_first=drop_first)
-
-
-
-
+    return mds(n_components=n_components, strength_matrix=simplex_strength_matrix)
